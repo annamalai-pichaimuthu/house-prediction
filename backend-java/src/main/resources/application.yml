@@ -1,0 +1,86 @@
+server:
+  port: ${BACKEND_JAVA_PORT:9090}
+  address: 0.0.0.0
+
+spring:
+  application:
+    name: property-market-analysis
+  cache:
+    type: caffeine
+    # TTL and size are set programmatically in CacheConfig (Caffeine builder)
+    # so that they read from cache.refresh-interval-ms — do not add a spec here.
+
+  # ── spring-dotenv file list ────────────────────────────────────────────────
+  # Loaded in order; later entries override earlier ones.
+  # Path tokens are relative to the working directory (project root when
+  # running with `mvn spring-boot:run` from backend-java/).
+  dotenv:
+    filepaths:
+      - ./.env.local     # backend-java/.env.local — copy from .env.local.example
+
+ml-model:
+  url: ${ML_MODEL_URL:http://localhost:8000}
+
+frontend:
+  url: ${FRONTEND_URL:http://localhost:3000}
+
+# ── Cache refresh ──────────────────────────────────────────────────────────
+# All four caches are evicted together on this schedule to keep them
+# consistent with each other (they all derive from the same ML model state).
+# Set cache.refresh-interval-ms in .env.local to override per environment.
+cache:
+  refresh-interval-ms: ${CACHE_REFRESH_MS:600000}   # default 10 min
+  initial-delay-ms:    ${CACHE_INITIAL_DELAY_MS:30000} # 30 s after startup
+
+springdoc:
+  api-docs:
+    path: /api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    operationsSorter: method
+    tagsSorter: alpha
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    com.housing: ${LOG_LEVEL:INFO}
+    org.springframework.web: WARN
+
+# ── What-If UI slider bounds ────────────────────────────────────────────────
+# These are REALISTIC limits for the what-if exploration tool — NOT training
+# ranges.  Edit here to widen or narrow what users can explore without
+# touching any Java code.
+#
+# year-built.max: 0 is a sentinel meaning "current calendar year at runtime".
+# All other zeros are treated as literal 0.
+what-if:
+  ranges:
+    square-footage:
+      min: 100
+      max: 20000
+    bedrooms:
+      min: 1
+      max: 10
+    bathrooms:
+      min: 0.5
+      max: 10
+    year-built:
+      min: 1800
+      max: 0          # 0 = resolved to current year at runtime
+    lot-size:
+      min: 500
+      max: 100000
+    distance-to-city-center:
+      min: 0
+      max: 100
+    school-rating:
+      min: 0
+      max: 10

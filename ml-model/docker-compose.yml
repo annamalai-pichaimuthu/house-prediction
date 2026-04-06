@@ -1,0 +1,37 @@
+
+version: "3.9"
+
+services:
+
+  # ── API (scale this horizontally: docker compose up --scale api=4) ──────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    # Load shared root .env first, then service-local .env.local overrides.
+    # docker compose merges both files; later file wins on conflicts.
+    env_file:
+      - ../.env          # shared root (ML_MODEL_URL, LOG_LEVEL, APP_ENV, etc.)
+      - ./.env.local     # service-local overrides (MODEL_PATH, INFERENCE_WORKERS)
+    # No port exposed directly — traffic comes through nginx
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ── nginx reverse proxy / load balancer ─────────────────────────────────────
+  nginx:
+    image: nginx:1.25-alpine
+    ports:
+      - "${ML_MODEL_PORT:-8000}:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped

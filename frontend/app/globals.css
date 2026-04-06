@@ -1,0 +1,10 @@
+@import "tailwindcss";
+
+:root {
+  --app1: #2563eb;   /* blue-600  — App 1 accent */
+  --app2: #059669;   /* emerald-600 — App 2 accent */
+}
+
+body {
+  @apply bg-slate-50 text-slate-900 antialiased;
+}

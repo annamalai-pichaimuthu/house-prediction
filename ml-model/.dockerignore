@@ -1,0 +1,28 @@
+# Dev / test tooling
+load_test.py
+requirements-dev.txt
+docker_helper.txt
+Makefile
+
+# Docs
+README.md
+*.md
+
+# Env samples
+.env*
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
