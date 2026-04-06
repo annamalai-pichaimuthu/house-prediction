@@ -154,7 +154,7 @@ export default function ResultCard({
             <div>
               <p className="font-semibold text-orange-800 text-sm">Not a fit for the current market</p>
               <p className="text-xs text-orange-700 mt-0.5">
-                This combination of inputs is outside what the model can reliably value.
+                This combination of inputs is outside the range of available market data.
                 Here's the closest viable property profile:
               </p>
             </div>

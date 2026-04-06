@@ -7,7 +7,9 @@ import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
+import java.util.function.ToDoubleFunction;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * All market statistics and insights are computed directly from the
@@ -147,8 +149,9 @@ public class MarketService {
                         rows.stream().filter(r -> r.distanceToCityCenter() > dHi).toList())
         );
 
-        // ── 4. Price drivers from ML model coefficients ──────────────────────
-        // These are the model's learned linear weights — not derivable from raw data alone.
+        // ── 4. Price drivers — OLS slopes computed from CSV data ─────────────
+        // β = Cov(feature, price) / Var(feature): price change per one-unit increase
+        // in each feature, derived purely from the dataset (no ML model call needed).
         Map<String, String> labelMap = Map.of(
                 "squareFootage",        "Square Footage",
                 "bedrooms",             "Bedrooms",
@@ -158,12 +161,39 @@ public class MarketService {
                 "distanceToCityCenter", "Distance to City",
                 "schoolRating",         "School Rating"
         );
-        var priceDrivers = mlModelClient.getCoefficients().entrySet().stream()
-                .map(e -> new PriceDriver(e.getKey(),
-                        labelMap.getOrDefault(e.getKey(), e.getKey()),
-                        e.getValue().priceChangePerUnit(), e.getValue().unit()))
-                .sorted(Comparator.comparingDouble(d -> -Math.abs(d.priceChangePerUnit())))
-                .toList();
+        Map<String, String> unitMap = Map.of(
+                "squareFootage",        "per sq ft",
+                "bedrooms",             "per bedroom",
+                "bathrooms",            "per bathroom",
+                "yearBuilt",            "per year",
+                "lotSize",              "per sq ft",
+                "distanceToCityCenter", "per mile",
+                "schoolRating",         "per point"
+        );
+        double priceMean = rows.stream().mapToDouble(HouseRecord::price).average().orElse(0);
+        var priceDrivers = Stream.<Map.Entry<String, ToDoubleFunction<HouseRecord>>>of(
+                Map.entry("squareFootage",        HouseRecord::squareFootage),
+                Map.entry("bedrooms",             r -> (double) r.bedrooms()),
+                Map.entry("bathrooms",            HouseRecord::bathrooms),
+                Map.entry("yearBuilt",            r -> (double) r.yearBuilt()),
+                Map.entry("lotSize",              HouseRecord::lotSize),
+                Map.entry("distanceToCityCenter", HouseRecord::distanceToCityCenter),
+                Map.entry("schoolRating",         HouseRecord::schoolRating)
+        ).map(e -> {
+            String feat   = e.getKey();
+            ToDoubleFunction<HouseRecord> getter = e.getValue();
+            double featMean = rows.stream().mapToDouble(getter).average().orElse(0);
+            double cov = rows.stream()
+                    .mapToDouble(r -> (getter.applyAsDouble(r) - featMean) * (r.price() - priceMean))
+                    .average().orElse(0);
+            double var = rows.stream()
+                    .mapToDouble(r -> Math.pow(getter.applyAsDouble(r) - featMean, 2))
+                    .average().orElse(1);
+            double slope = var == 0 ? 0 : cov / var;
+            return new PriceDriver(feat, labelMap.getOrDefault(feat, feat),
+                    round2(slope), unitMap.getOrDefault(feat, "per unit"));
+        }).sorted(Comparator.comparingDouble(d -> -Math.abs(d.priceChangePerUnit())))
+          .toList();
 
         // ── 5 & 6. Best-value spots from real dataset rows ───────────────────
         var allSpots = rows.stream()

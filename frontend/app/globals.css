@@ -7,4 +7,60 @@
 
 body {
   @apply bg-slate-50 text-slate-900 antialiased;
+  scroll-behavior: smooth;
+}
+
+/* ── Page entrance animation ─────────────────────────────────────────────── */
+@keyframes page-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+main {
+  animation: page-in 0.25s ease-out both;
+}
+
+/* ── View Transitions API — cross-page fade ───────────────────────────────── */
+@view-transition {
+  navigation: auto;
+}
+
+::view-transition-old(root) {
+  animation: 0.18s ease-in both fade-out;
+}
+
+::view-transition-new(root) {
+  animation: 0.22s ease-out both page-in;
+}
+
+@keyframes fade-out {
+  to {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
+/* ── Interactive element focus ring ──────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--app1);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ── Skeleton shimmer override ───────────────────────────────────────────── */
+@keyframes shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+
+.animate-pulse {
+  background: linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 50%, #e2e8f0 75%);
+  background-size: 800px 100%;
+  animation: shimmer 1.4s infinite linear;
 }

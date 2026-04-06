@@ -28,7 +28,7 @@ public class CacheRefreshService {
     @CacheEvict(cacheNames = {
             CacheConfig.CACHE_MODEL_COEFF,
             CacheConfig.CACHE_STATISTICS,
-            CacheConfig.CACHE_INSIGHTS,
+            CacheConfig.CACHE_INSIGHTS
     }, allEntries = true)
     public void evictAll() {
         log.debug("Cache evicted — statistics, insights, and model coefficients cleared.");

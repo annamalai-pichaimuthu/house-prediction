@@ -11,7 +11,6 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 
 /**
@@ -54,11 +53,7 @@ public class MlModelClient {
     ) {}
 
     record MlModelInfo(
-            @JsonProperty("model_type")      String modelType,
-            @JsonProperty("training_rows")   int    trainingRows,
-            Map<String, Double>              coefficients,
-            double                           intercept,
-            @JsonProperty("training_ranges") Map<String, List<Double>> trainingRanges
+            Map<String, Double> coefficients
     ) {}
 
     // ── Mapping tables ───────────────────────────────────────────────────────

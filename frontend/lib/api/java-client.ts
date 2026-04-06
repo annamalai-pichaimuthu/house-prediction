@@ -1,13 +1,25 @@
 
 const BASE = process.env.NEXT_PUBLIC_JAVA_API_URL ?? "http://localhost:9090";
 
+export interface HouseRecord {
+  id:                   number;
+  squareFootage:        number;
+  bedrooms:             number;
+  bathrooms:            number;
+  yearBuilt:            number;
+  lotSize:              number;
+  distanceToCityCenter: number;
+  schoolRating:         number;
+  price:                number;
+}
+
 export interface MarketStatistics {
   totalProperties: number;
   priceStats: { min: number; max: number; average: number; median: number };
   squareFootageStats: { average: number };
   yearBuiltStats:     { average: number };
   schoolRatingStats:  { average: number };
-  /** [min, max] per feature — the ML model's training envelope. Used internally for synthetic inputs. */
+  /** [min, max] per feature — the actual data range from the CSV dataset. */
   trainingRanges: Record<string, [number, number]>;
   /** [min, max] per feature — realistic human limits for the what-if slider UI (from application.yml). */
   whatIfRanges: Record<string, [number, number]>;
@@ -71,6 +83,15 @@ export interface WhatIfResponse {
   sensitivityAnalysis: Record<string, { priceChangePerUnit: number; unit: string }>;
 }
 
+/** Which sections to include in a CSV or PDF export. */
+export interface ExportSections {
+  includeOverview:  boolean;
+  includeSegments:  boolean;
+  includeDrivers:   boolean;
+  includeTopPicks:  boolean;
+  includeListing:   boolean;
+}
+
 const DEFAULT_TIMEOUT_MS = 15_000;
 
 async function apiFetch<T>(path: string, init?: RequestInit & { signal?: AbortSignal }): Promise<T> {
@@ -98,6 +119,10 @@ export const javaClient = {
     return apiFetch("/api/market/statistics");
   },
 
+  getProperties(): Promise<HouseRecord[]> {
+    return apiFetch("/api/market/properties");
+  },
+
   whatIf(req: WhatIfRequest, signal?: AbortSignal): Promise<WhatIfResponse> {
     return apiFetch("/api/market/whatif", {
       method: "POST",
@@ -107,14 +132,21 @@ export const javaClient = {
     });
   },
 
-  /** Clears all server-side caches. Call after retraining the model to get fresh data immediately. */
+  /** Clears all server-side caches. Call after updating the CSV dataset to reload fresh insights. */
   evictCaches(): Promise<void> {
     return apiFetch("/api/market/cache/evict", { method: "POST" });
   },
 
-  async exportFile(type: "csv" | "pdf"): Promise<Blob> {
+  async exportFile(type: "csv" | "pdf", sections: ExportSections): Promise<Blob> {
+    const params = new URLSearchParams({
+      includeOverview:  String(sections.includeOverview),
+      includeSegments:  String(sections.includeSegments),
+      includeDrivers:   String(sections.includeDrivers),
+      includeTopPicks:  String(sections.includeTopPicks),
+      includeListing:   String(sections.includeListing),
+    });
     const timeout = AbortSignal.timeout(DEFAULT_TIMEOUT_MS);
-    const res = await fetch(`${BASE}/api/market/export/${type}`, { signal: timeout });
+    const res = await fetch(`${BASE}/api/market/export/${type}?${params}`, { signal: timeout });
     if (!res.ok) {
       const err = await res.text();
       throw new Error(`${res.status}: ${err}`);

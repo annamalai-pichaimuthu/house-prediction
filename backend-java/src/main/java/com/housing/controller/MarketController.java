@@ -1,7 +1,9 @@
 package com.housing.controller;
 
 import com.housing.config.CacheConfig;
+import com.housing.model.HouseRecord;
 import com.housing.model.dto.*;
+import com.housing.service.CsvDataService;
 import com.housing.service.ExportService;
 import com.housing.service.MarketService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -14,6 +16,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 @RestController
@@ -23,15 +26,26 @@ public class MarketController {
 
     private static final List<String> ALL_CACHES = CacheConfig.ALL_CACHE_NAMES;
 
-    private final MarketService marketService;
-    private final ExportService exportService;
-    private final CacheManager  cacheManager;
+    private final MarketService  marketService;
+    private final ExportService  exportService;
+    private final CsvDataService csvDataService;
+    private final CacheManager   cacheManager;
 
     public MarketController(MarketService marketService, ExportService exportService,
-                            CacheManager cacheManager) {
-        this.marketService = marketService;
-        this.exportService = exportService;
-        this.cacheManager  = cacheManager;
+                            CsvDataService csvDataService, CacheManager cacheManager) {
+        this.marketService  = marketService;
+        this.exportService  = exportService;
+        this.csvDataService = csvDataService;
+        this.cacheManager   = cacheManager;
+    }
+
+    // ── Property listing ──────────────────────────────────────────────────────
+
+    @GetMapping("/properties")
+    @Operation(summary = "Full property listing",
+               description = "Returns all rows from the CSV dataset as JSON for the interactive property table.")
+    public ResponseEntity<List<HouseRecord>> properties() {
+        return ResponseEntity.ok(csvDataService.all());
     }
 
     // ── Insights ─────────────────────────────────────────────────────────────
@@ -79,10 +93,18 @@ public class MarketController {
     // ── Exports ──────────────────────────────────────────────────────────────
 
     @GetMapping("/export/csv")
-    @Operation(summary = "Export dataset as CSV",
-               description = "Downloads the full housing dataset as a CSV file.")
-    public ResponseEntity<byte[]> exportCsv() throws IOException {
-        byte[] csv = exportService.generateCsv().getBytes();
+    @Operation(summary = "Export market data as CSV",
+               description = "Downloads selected dashboard sections as CSV. All sections included by default.")
+    public ResponseEntity<byte[]> exportCsv(
+            @RequestParam(defaultValue = "true") boolean includeOverview,
+            @RequestParam(defaultValue = "true") boolean includeSegments,
+            @RequestParam(defaultValue = "true") boolean includeDrivers,
+            @RequestParam(defaultValue = "true") boolean includeTopPicks,
+            @RequestParam(defaultValue = "true") boolean includeListing
+    ) throws IOException {
+        var opts = new ExportOptions(
+                includeOverview, includeSegments, includeDrivers, includeTopPicks, includeListing);
+        byte[] csv = exportService.generateCsv(opts).getBytes(StandardCharsets.UTF_8);
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"housing_market_data.csv\"")
                 .contentType(MediaType.parseMediaType("text/csv; charset=UTF-8"))
@@ -92,9 +114,17 @@ public class MarketController {
 
     @GetMapping("/export/pdf")
     @Operation(summary = "Export market report as PDF",
-               description = "Downloads a PDF report with market summary statistics and the full property listing.")
-    public ResponseEntity<byte[]> exportPdf() throws IOException {
-        byte[] pdf = exportService.generatePdf();
+               description = "Downloads selected dashboard sections as a PDF report. All sections included by default.")
+    public ResponseEntity<byte[]> exportPdf(
+            @RequestParam(defaultValue = "true") boolean includeOverview,
+            @RequestParam(defaultValue = "true") boolean includeSegments,
+            @RequestParam(defaultValue = "true") boolean includeDrivers,
+            @RequestParam(defaultValue = "true") boolean includeTopPicks,
+            @RequestParam(defaultValue = "true") boolean includeListing
+    ) throws IOException {
+        var opts = new ExportOptions(
+                includeOverview, includeSegments, includeDrivers, includeTopPicks, includeListing);
+        byte[] pdf = exportService.generatePdf(opts);
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"housing_market_report.pdf\"")
                 .contentType(MediaType.APPLICATION_PDF)

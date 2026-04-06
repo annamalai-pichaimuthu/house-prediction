@@ -145,7 +145,7 @@ function AnalysisContent({
           <CardHeader>
             <h2 className="font-semibold text-slate-800">Adjust Property Features</h2>
             <p className="text-xs text-slate-400 mt-0.5">
-              Sliders start at the model's training midpoints. Move any slider to see
+              Sliders start at the dataset midpoints. Move any slider to see
               how that change shifts the estimated price from the baseline.
             </p>
           </CardHeader>
@@ -206,7 +206,7 @@ function AnalysisContent({
                       <p className="text-xl font-bold text-slate-700 mt-1 tabular-nums">
                         {baselinePrice.current !== null ? formatCurrency(baselinePrice.current) : "—"}
                       </p>
-                      <p className="text-[10px] text-slate-400 mt-0.5">training midpoints</p>
+                      <p className="text-[10px] text-slate-400 mt-0.5">dataset midpoints</p>
                     </div>
                     <div className={`rounded-xl p-3 ${isDirty ? "bg-emerald-50" : "bg-slate-50"}`}>
                       <p className="text-xs text-slate-500 font-medium">Current estimate</p>
@@ -327,8 +327,8 @@ function AnalysisContent({
           <CardHeader>
             <h2 className="font-semibold text-slate-800">Price Sensitivity per Feature</h2>
             <p className="text-xs text-slate-400 mt-0.5">
-              How much does the model price change for every one-unit increase in each feature?
-              These are the model's learned weights — they apply regardless of current slider positions.
+              How much does price change for every one-unit increase in each feature?
+              These are derived from the CSV dataset and apply regardless of current slider positions.
             </p>
           </CardHeader>
           <CardBody>

@@ -31,13 +31,15 @@ function _useRefreshKey(): number {
 
 // ── useMarketInsights ─────────────────────────────────────────────────────────
 
-export function useMarketInsights() {
-  const [insights, setInsights] = useState<InsightsResponse | null>(null);
-  const [loading,  setLoading]  = useState(true);
+export function useMarketInsights(initial?: InsightsResponse | null) {
+  const [insights, setInsights] = useState<InsightsResponse | null>(initial ?? null);
+  const [loading,  setLoading]  = useState(!initial);
   const [error,    setError]    = useState<string | null>(null);
   const fetchKey = _useRefreshKey();
 
   useEffect(() => {
+    // Skip the initial fetch if we already have server-side data (fetchKey === 0)
+    if (fetchKey === 0 && initial) return;
     setLoading(true);
     setError(null);
     javaClient
@@ -45,6 +47,7 @@ export function useMarketInsights() {
       .then(setInsights)
       .catch((e: unknown) => setError(e instanceof Error ? e.message : "Failed to load market data"))
       .finally(() => setLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchKey]);
 
   /** Evicts all server-side caches then re-fetches BOTH insights and statistics. */
@@ -62,13 +65,15 @@ export function useMarketInsights() {
 
 // ── useMarketStatistics ───────────────────────────────────────────────────────
 
-export function useMarketStatistics() {
-  const [statistics, setStatistics] = useState<MarketStatistics | null>(null);
-  const [loading,    setLoading]    = useState(true);
+export function useMarketStatistics(initial?: MarketStatistics | null) {
+  const [statistics, setStatistics] = useState<MarketStatistics | null>(initial ?? null);
+  const [loading,    setLoading]    = useState(!initial);
   const [error,      setError]      = useState<string | null>(null);
   const fetchKey = _useRefreshKey();  // re-fetches when refresh() is called anywhere on the page
 
   useEffect(() => {
+    // Skip the initial fetch if we already have server-side data (fetchKey === 0)
+    if (fetchKey === 0 && initial) return;
     setLoading(true);
     setError(null);
     javaClient
@@ -76,6 +81,7 @@ export function useMarketStatistics() {
       .then(setStatistics)
       .catch((e: unknown) => setError(e instanceof Error ? e.message : "Failed to load statistics"))
       .finally(() => setLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchKey]);
 
   return { statistics, loading, error };
