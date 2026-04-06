@@ -1,6 +1,7 @@
 package com.housing.controller;
 
 import com.housing.model.dto.HealthResponse;
+import com.housing.service.CsvDataService;
 import com.housing.service.MlModelClient;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -17,19 +18,20 @@ import java.time.Instant;
 public class HealthController {
 
     private final MlModelClient mlModelClient;
+    private final CsvDataService csvDataService;
 
-    public HealthController(MlModelClient mlModelClient) {
+    public HealthController(MlModelClient mlModelClient, CsvDataService csvDataService) {
         this.mlModelClient = mlModelClient;
+        this.csvDataService = csvDataService;
     }
 
     @GetMapping("/health")
     @Operation(summary = "Health check", description = "Returns service status and ML model connectivity")
     public ResponseEntity<HealthResponse> health() {
-        var info = mlModelClient.getModelInfo();
         return ResponseEntity.ok(new HealthResponse(
                 "UP",
                 mlModelClient.isHealthy(),
-                info != null ? info.trainingRows() : 0,
+                csvDataService.all().size(),
                 Instant.now()
         ));
     }

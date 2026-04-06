@@ -1,65 +1,91 @@
 package com.housing.service;
 
 import com.housing.config.WhatIfRangesConfig;
+import com.housing.model.HouseRecord;
 import com.housing.model.dto.*;
-import com.housing.service.MlModelClient.MlModelInfo;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
+import java.util.stream.Collectors;
 
+/**
+ * All market statistics and insights are computed directly from the
+ * CSV dataset loaded by {@link CsvDataService}.
+ *
+ * The ML model is only called for the what-if endpoint (live prediction).
+ * This makes the dashboard independent of ML model availability.
+ */
 @Service
 public class MarketService {
 
+    private final CsvDataService     csvDataService;
     private final MlModelClient      mlModelClient;
     private final WhatIfRangesConfig whatIfRangesConfig;
 
-    public MarketService(MlModelClient mlModelClient, WhatIfRangesConfig whatIfRangesConfig) {
-        this.mlModelClient      = mlModelClient;
-        this.whatIfRangesConfig = whatIfRangesConfig;
+    public MarketService(CsvDataService csvDataService,
+                         MlModelClient mlModelClient,
+                         WhatIfRangesConfig whatIfRangesConfig) {
+        this.csvDataService      = csvDataService;
+        this.mlModelClient       = mlModelClient;
+        this.whatIfRangesConfig  = whatIfRangesConfig;
     }
 
     // ── Statistics ───────────────────────────────────────────────────────────
 
+    /**
+     * Aggregate statistics computed from the raw CSV rows.
+     * Result is cached; no ML model call required.
+     */
     @Cacheable("statistics")
     public MarketStatistics getStatistics() {
-        MlModelInfo info = mlModelClient.getModelInfo();
-        if (info == null) throw new RuntimeException("ML model unavailable");
+        List<HouseRecord> rows = csvDataService.all();
+        if (rows.isEmpty()) throw new RuntimeException("Dataset not loaded");
 
-        var ranges = info.trainingRanges();
+        DoubleSummaryStatistics priceStats  = rows.stream().mapToDouble(HouseRecord::price).summaryStatistics();
+        DoubleSummaryStatistics sqftStats   = rows.stream().mapToDouble(HouseRecord::squareFootage).summaryStatistics();
+        DoubleSummaryStatistics yearStats   = rows.stream().mapToDouble(HouseRecord::yearBuilt).summaryStatistics();
+        DoubleSummaryStatistics schoolStats = rows.stream().mapToDouble(HouseRecord::schoolRating).summaryStatistics();
 
-        // Predict prices at three representative configs to derive market range
-        var configs = List.of(
-                synthLow(ranges),   // all features at their training minimum
-                midpoint(ranges),   // all features at their training midpoint
-                synthHigh(ranges)   // all features at their training maximum
+        double median = computeMedian(rows.stream().mapToDouble(HouseRecord::price).toArray());
+
+        // Build training ranges from actual dataset min/max (keeps existing API contract)
+        Map<String, List<Double>> trainingRanges = Map.of(
+                "square_footage",          List.of(round2(rows.stream().mapToDouble(HouseRecord::squareFootage).min().orElse(0)),          round2(rows.stream().mapToDouble(HouseRecord::squareFootage).max().orElse(0))),
+                "bedrooms",                List.of((double) rows.stream().mapToInt(HouseRecord::bedrooms).min().orElse(0),                  (double) rows.stream().mapToInt(HouseRecord::bedrooms).max().orElse(0)),
+                "bathrooms",               List.of(round2(rows.stream().mapToDouble(HouseRecord::bathrooms).min().orElse(0)),               round2(rows.stream().mapToDouble(HouseRecord::bathrooms).max().orElse(0))),
+                "year_built",              List.of((double) rows.stream().mapToInt(HouseRecord::yearBuilt).min().orElse(0),                 (double) rows.stream().mapToInt(HouseRecord::yearBuilt).max().orElse(0)),
+                "lot_size",                List.of(round2(rows.stream().mapToDouble(HouseRecord::lotSize).min().orElse(0)),                 round2(rows.stream().mapToDouble(HouseRecord::lotSize).max().orElse(0))),
+                "distance_to_city_center", List.of(round2(rows.stream().mapToDouble(HouseRecord::distanceToCityCenter).min().orElse(0)),   round2(rows.stream().mapToDouble(HouseRecord::distanceToCityCenter).max().orElse(0))),
+                "school_rating",           List.of(round2(rows.stream().mapToDouble(HouseRecord::schoolRating).min().orElse(0)),            round2(rows.stream().mapToDouble(HouseRecord::schoolRating).max().orElse(0)))
         );
-        var prices = mlModelClient.batchPredict(configs);
-
-        double minPrice = prices.stream().mapToDouble(Double::doubleValue).min().orElse(0);
-        double maxPrice = prices.stream().mapToDouble(Double::doubleValue).max().orElse(0);
-        double avgPrice = prices.stream().mapToDouble(Double::doubleValue).average().orElse(0);
 
         return new MarketStatistics(
-                info.trainingRows(),
+                rows.size(),
                 new MarketStatistics.PriceStats(
-                        round2(minPrice), round2(maxPrice),
-                        round2(avgPrice), round2((minPrice + maxPrice) / 2.0)),
-                new StatRange(round2(midOf(ranges, "square_footage"))),
-                new StatRange(round2(midOf(ranges, "year_built"))),
-                new StatRange(round2(midOf(ranges, "school_rating"))),
-                ranges,                            // training_ranges — for internal computations
-                whatIfRangesConfig.toApiMap()      // realistic UI bounds — for what-if sliders
+                        round2(priceStats.getMin()),
+                        round2(priceStats.getMax()),
+                        round2(priceStats.getAverage()),
+                        round2(median)),
+                new StatRange(round2(sqftStats.getAverage())),
+                new StatRange(round2(yearStats.getAverage())),
+                new StatRange(round2(schoolStats.getAverage())),
+                trainingRanges,
+                whatIfRangesConfig.toApiMap()
         );
     }
 
     // ── What-if analysis ─────────────────────────────────────────────────────
 
+    /**
+     * Calls the ML model for a live price prediction, then compares it
+     * against the CSV-derived market average.
+     */
     public WhatIfResponse whatIf(WhatIfRequest req) {
         double predictedPrice = round2(mlModelClient.predict(req));
-        double avgPrice = round2(getStatistics().priceStats().average());
-        double diff = round2(predictedPrice - avgPrice);
-        double pct = avgPrice > 0 ? round2((diff / avgPrice) * 100) : 0;
+        double avgPrice       = round2(getStatistics().priceStats().average());
+        double diff           = round2(predictedPrice - avgPrice);
+        double pct            = avgPrice > 0 ? round2((diff / avgPrice) * 100) : 0;
 
         return new WhatIfResponse(
                 predictedPrice, "USD", req,
@@ -69,79 +95,60 @@ public class MarketService {
 
     // ── Insights ─────────────────────────────────────────────────────────────
 
+    /**
+     * All segment breakdowns and best-value lists are computed from real CSV rows.
+     * Price drivers (coefficients) are still fetched from the ML model — they represent
+     * the model's learned weights, not a raw-data statistic.
+     * Result is cached; only the price-drivers field requires the ML model.
+     */
     @Cacheable("insights")
     public InsightsResponse getInsights() {
-        MlModelInfo info = mlModelClient.getModelInfo();
-        if (info == null) throw new RuntimeException("ML model unavailable");
-
-        var ranges = info.trainingRanges();
+        List<HouseRecord> rows = csvDataService.all();
+        if (rows.isEmpty()) throw new RuntimeException("Dataset not loaded");
 
         // ── 1. Segment by bedroom count ──────────────────────────────────────
-        int[] bedroomValues = intLinspace(ranges, "bedrooms", 3);
-        var bedroomInputs   = Arrays.stream(bedroomValues)
-                .mapToObj(b -> synthWith(ranges, "bedrooms", (double) b))
+        var byBedrooms = rows.stream()
+                .collect(Collectors.groupingBy(HouseRecord::bedrooms))
+                .entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())
+                .map(e -> segmentFromRows(e.getKey() + " Bed", e.getValue()))
                 .toList();
-        var bedroomPrices = mlModelClient.batchPredict(bedroomInputs);
-        var byBedrooms    = new ArrayList<SegmentInsight>();
-        for (int i = 0; i < bedroomValues.length; i++) {
-            byBedrooms.add(makeSegment(
-                    bedroomValues[i] + " Bed",
-                    bedroomPrices.get(i),
-                    midOf(ranges, "square_footage"),
-                    midOf(ranges, "school_rating")));
-        }
 
         // ── 2. Segment by school rating tier ─────────────────────────────────
-        // Divide school_rating range into 3 equal zones; use each zone's centre.
-        double[] srBounds   = zoneBoundaries(ranges, "school_rating");   // [b1, b2]
-        double   srMin      = rangeMin(ranges, "school_rating");
-        double   srMax      = rangeMax(ranges, "school_rating");
-        double[] srCentres  = zoneCentres(srMin, srMax, 3);
-        var schoolInputs    = Arrays.stream(srCentres)
-                .mapToObj(v -> synthWith(ranges, "school_rating", v))
-                .toList();
-        var schoolPrices = mlModelClient.batchPredict(schoolInputs);
+        // Thresholds computed from dataset min/max → three equal-width bands
+        double srMin = rows.stream().mapToDouble(HouseRecord::schoolRating).min().orElse(0);
+        double srMax = rows.stream().mapToDouble(HouseRecord::schoolRating).max().orElse(10);
+        double srSpan = (srMax - srMin) / 3.0;
+        double srLo = round2(srMin + srSpan);
+        double srHi = round2(srMin + 2 * srSpan);
+
         var bySchoolTier = List.of(
-                makeSegment(
-                        String.format("Low (< %.1f)", srBounds[0]),
-                        schoolPrices.get(0),
-                        midOf(ranges, "square_footage"), srCentres[0]),
-                makeSegment(
-                        String.format("Mid (%.1f – %.1f)", srBounds[0], srBounds[1]),
-                        schoolPrices.get(1),
-                        midOf(ranges, "square_footage"), srCentres[1]),
-                makeSegment(
-                        String.format("High (≥ %.1f)", srBounds[1]),
-                        schoolPrices.get(2),
-                        midOf(ranges, "square_footage"), srCentres[2])
+                segmentFromRows(String.format("Low (< %.1f)", srLo),
+                        rows.stream().filter(r -> r.schoolRating() < srLo).toList()),
+                segmentFromRows(String.format("Mid (%.1f – %.1f)", srLo, srHi),
+                        rows.stream().filter(r -> r.schoolRating() >= srLo && r.schoolRating() < srHi).toList()),
+                segmentFromRows(String.format("High (≥ %.1f)", srHi),
+                        rows.stream().filter(r -> r.schoolRating() >= srHi).toList())
         );
 
         // ── 3. Segment by location zone ──────────────────────────────────────
-        // Divide distance_to_city_center range into 3 equal zones.
-        double[] distBounds  = zoneBoundaries(ranges, "distance_to_city_center");
-        double   distMin     = rangeMin(ranges, "distance_to_city_center");
-        double   distMax     = rangeMax(ranges, "distance_to_city_center");
-        double[] distCentres = zoneCentres(distMin, distMax, 3);
-        var locationInputs   = Arrays.stream(distCentres)
-                .mapToObj(v -> synthWith(ranges, "distance_to_city_center", v))
-                .toList();
-        var locationPrices  = mlModelClient.batchPredict(locationInputs);
-        var byLocationZone  = List.of(
-                makeSegment(
-                        String.format("Urban (≤ %.1f mi)", distBounds[0]),
-                        locationPrices.get(0),
-                        midOf(ranges, "square_footage"), midOf(ranges, "school_rating")),
-                makeSegment(
-                        String.format("Suburban (%.1f–%.1f mi)", distBounds[0], distBounds[1]),
-                        locationPrices.get(1),
-                        midOf(ranges, "square_footage"), midOf(ranges, "school_rating")),
-                makeSegment(
-                        String.format("Outer (> %.1f mi)", distBounds[1]),
-                        locationPrices.get(2),
-                        midOf(ranges, "square_footage"), midOf(ranges, "school_rating"))
+        double dMin  = rows.stream().mapToDouble(HouseRecord::distanceToCityCenter).min().orElse(0);
+        double dMax  = rows.stream().mapToDouble(HouseRecord::distanceToCityCenter).max().orElse(20);
+        double dSpan = (dMax - dMin) / 3.0;
+        double dLo   = round2(dMin + dSpan);
+        double dHi   = round2(dMin + 2 * dSpan);
+
+        var byLocationZone = List.of(
+                segmentFromRows(String.format("Urban (≤ %.1f mi)", dLo),
+                        rows.stream().filter(r -> r.distanceToCityCenter() <= dLo).toList()),
+                segmentFromRows(String.format("Suburban (%.1f–%.1f mi)", dLo, dHi),
+                        rows.stream().filter(r -> r.distanceToCityCenter() > dLo && r.distanceToCityCenter() <= dHi).toList()),
+                segmentFromRows(String.format("Outer (> %.1f mi)", dHi),
+                        rows.stream().filter(r -> r.distanceToCityCenter() > dHi).toList())
         );
 
-        // ── 4. Price drivers from model coefficients ──────────────────────────
+        // ── 4. Price drivers from ML model coefficients ──────────────────────
+        // These are the model's learned linear weights — not derivable from raw data alone.
         Map<String, String> labelMap = Map.of(
                 "squareFootage",        "Square Footage",
                 "bedrooms",             "Bedrooms",
@@ -158,38 +165,21 @@ public class MarketService {
                 .sorted(Comparator.comparingDouble(d -> -Math.abs(d.priceChangePerUnit())))
                 .toList();
 
-        // ── 5 & 6. Best-value grid ────────────────────────────────────────────
-        // Evenly sample each feature's training range — 6 × 3 × 4 × 4 = 288 combos.
-        double[] sqFts     = linspace(ranges, "square_footage",          6);
-        int[]    beds      = intLinspace(ranges, "bedrooms",              3);
-        double[] schools   = linspace(ranges, "school_rating",            4);
-        double[] distances = linspace(ranges, "distance_to_city_center",  4);
-        double   bathMid   = midOf(ranges, "bathrooms");
-        double   yearMid   = midOf(ranges, "year_built");
-        double   lotMid    = midOf(ranges, "lot_size");
-
-        List<WhatIfRequest> grid = new ArrayList<>();
-        for (double sqft : sqFts)
-            for (int bed : beds)
-                for (double school : schools)
-                    for (double dist : distances)
-                        grid.add(new WhatIfRequest(
-                                sqft, bed, bathMid, (int) Math.round(yearMid),
-                                lotMid, dist, school));
-
-        var gridPrices = mlModelClient.batchPredict(grid);
-
-        List<ValueSpot> allSpots = new ArrayList<>();
-        for (int i = 0; i < grid.size(); i++) {
-            WhatIfRequest r = grid.get(i);
-            double price = gridPrices.get(i);
-            if (price <= 0) continue;
-            allSpots.add(new ValueSpot(
-                    r.squareFootage().intValue(), r.bedrooms(), r.bathrooms(), r.yearBuilt(),
-                    r.schoolRating(), r.distanceToCityCenter(), round2(price),
-                    round2(price / r.squareFootage()),
-                    round2(r.schoolRating() / (price / 100_000.0))));
-        }
+        // ── 5 & 6. Best-value spots from real dataset rows ───────────────────
+        var allSpots = rows.stream()
+                .filter(r -> r.price() > 0 && r.squareFootage() > 0)
+                .map(r -> new ValueSpot(
+                        (int) r.squareFootage(),
+                        r.bedrooms(),
+                        r.bathrooms(),
+                        r.yearBuilt(),
+                        r.schoolRating(),
+                        r.distanceToCityCenter(),
+                        round2(r.price()),
+                        round2(r.price() / r.squareFootage()),
+                        round2(r.schoolRating() / (r.price() / 100_000.0))
+                ))
+                .toList();
 
         var bestByPrice = allSpots.stream()
                 .sorted(Comparator.comparingDouble(ValueSpot::pricePerSqFt))
@@ -204,102 +194,26 @@ public class MarketService {
                 priceDrivers, bestByPrice, bestBySchool);
     }
 
-    // ── Synthetic input builders ──────────────────────────────────────────────
+    // ── Helpers ───────────────────────────────────────────────────────────────
 
-    /** All features at their training midpoints. */
-    private WhatIfRequest midpoint(Map<String, List<Double>> r) {
-        return new WhatIfRequest(
-                midOf(r, "square_footage"),
-                (int) Math.round(midOf(r, "bedrooms")),
-                midOf(r, "bathrooms"),
-                (int) Math.round(midOf(r, "year_built")),
-                midOf(r, "lot_size"),
-                midOf(r, "distance_to_city_center"),
-                midOf(r, "school_rating"));
+    /** Build a {@link SegmentInsight} from a list of real CSV rows. */
+    private SegmentInsight segmentFromRows(String label, List<HouseRecord> rows) {
+        if (rows.isEmpty()) return new SegmentInsight(label, 0, 0, 0, 0);
+        double avgPrice  = round2(rows.stream().mapToDouble(HouseRecord::price).average().orElse(0));
+        double avgSqFt   = round2(rows.stream().mapToDouble(HouseRecord::squareFootage).average().orElse(0));
+        double avgSchool = round2(rows.stream().mapToDouble(HouseRecord::schoolRating).average().orElse(0));
+        return new SegmentInsight(label, rows.size(), avgPrice, avgSqFt, avgSchool);
     }
 
-    /** All features at their training minimums. */
-    private WhatIfRequest synthLow(Map<String, List<Double>> r) {
-        return new WhatIfRequest(
-                rangeMin(r, "square_footage"),
-                (int) Math.round(rangeMin(r, "bedrooms")),
-                rangeMin(r, "bathrooms"),
-                (int) Math.round(rangeMin(r, "year_built")),
-                rangeMin(r, "lot_size"),
-                rangeMax(r, "distance_to_city_center"),  // farthest = lower price
-                rangeMin(r, "school_rating"));
-    }
-
-    /** All features at their training maximums. */
-    private WhatIfRequest synthHigh(Map<String, List<Double>> r) {
-        return new WhatIfRequest(
-                rangeMax(r, "square_footage"),
-                (int) Math.round(rangeMax(r, "bedrooms")),
-                rangeMax(r, "bathrooms"),
-                (int) Math.round(rangeMax(r, "year_built")),
-                rangeMax(r, "lot_size"),
-                rangeMin(r, "distance_to_city_center"),  // nearest = higher price
-                rangeMax(r, "school_rating"));
-    }
-
-    /** Override a single feature on the midpoint input. */
-    private WhatIfRequest synthWith(Map<String, List<Double>> r, String feature, double value) {
-        WhatIfRequest mp = midpoint(r);
-        return switch (feature) {
-            case "bedrooms"                -> new WhatIfRequest(mp.squareFootage(), (int) Math.round(value), mp.bathrooms(), mp.yearBuilt(), mp.lotSize(), mp.distanceToCityCenter(), mp.schoolRating());
-            case "school_rating"           -> new WhatIfRequest(mp.squareFootage(), mp.bedrooms(), mp.bathrooms(), mp.yearBuilt(), mp.lotSize(), mp.distanceToCityCenter(), value);
-            case "distance_to_city_center" -> new WhatIfRequest(mp.squareFootage(), mp.bedrooms(), mp.bathrooms(), mp.yearBuilt(), mp.lotSize(), value, mp.schoolRating());
-            default -> mp;
-        };
-    }
-
-    // ── Range helpers ─────────────────────────────────────────────────────────
-
-    private double rangeMin(Map<String, List<Double>> r, String key) {
-        return r.getOrDefault(key, List.of(0.0, 1.0)).get(0);
-    }
-
-    private double rangeMax(Map<String, List<Double>> r, String key) {
-        return r.getOrDefault(key, List.of(0.0, 1.0)).get(1);
-    }
-
-    private double midOf(Map<String, List<Double>> r, String key) {
-        return (rangeMin(r, key) + rangeMax(r, key)) / 2.0;
-    }
-
-    private double[] linspace(Map<String, List<Double>> r, String key, int n) {
-        double lo = rangeMin(r, key), hi = rangeMax(r, key);
-        double[] pts = new double[n];
-        for (int i = 0; i < n; i++)
-            pts[i] = round2(lo + (hi - lo) * i / (n - 1));
-        return pts;
-    }
-
-    private int[] intLinspace(Map<String, List<Double>> r, String key, int n) {
-        int lo = (int) Math.round(rangeMin(r, key));
-        int hi = (int) Math.round(rangeMax(r, key));
-        int[] pts = new int[n];
-        for (int i = 0; i < n; i++)
-            pts[i] = (int) Math.round(lo + (double)(hi - lo) * i / (n - 1));
-        return pts;
-    }
-
-    private double[] zoneBoundaries(Map<String, List<Double>> r, String key) {
-        double lo = rangeMin(r, key), hi = rangeMax(r, key);
-        double span = (hi - lo) / 3.0;
-        return new double[]{ round2(lo + span), round2(lo + 2 * span) };
-    }
-
-    private double[] zoneCentres(double lo, double hi, int n) {
-        double zoneWidth = (hi - lo) / n;
-        double[] centres = new double[n];
-        for (int i = 0; i < n; i++)
-            centres[i] = round2(lo + zoneWidth * (i + 0.5));
-        return centres;
-    }
-
-    private SegmentInsight makeSegment(String label, double avgPrice, double avgSqFt, double avgSchool) {
-        return new SegmentInsight(label, 0, round2(avgPrice), round2(avgSqFt), round2(avgSchool));
+    /** Compute the median of an unsorted array of doubles. */
+    private double computeMedian(double[] values) {
+        if (values.length == 0) return 0;
+        double[] sorted = Arrays.copyOf(values, values.length);
+        Arrays.sort(sorted);
+        int mid = sorted.length / 2;
+        return sorted.length % 2 == 0
+                ? (sorted[mid - 1] + sorted[mid]) / 2.0
+                : sorted[mid];
     }
 
     private double round2(double v) {

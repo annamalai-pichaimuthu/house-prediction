@@ -15,16 +15,18 @@ import java.util.concurrent.TimeUnit;
 public class CacheConfig {
 
     // ── Canonical cache names ────────────────────────────────────────────────
-    // Single definition used by @Cacheable annotations, CacheRefreshService,
-    // and MarketController — a rename is one change, not three.
-    public static final String CACHE_MODEL_INFO  = "modelInfo";
+    // statistics and insights are computed from the CSV dataset (cheap to warm,
+    // but still cached so every request is O(1) after the first).
+    //
+    // modelCoefficients is kept for the what-if sensitivity table — it is the
+    // only remaining ML model call used by the dashboard.
     public static final String CACHE_MODEL_COEFF = "modelCoefficients";
     public static final String CACHE_STATISTICS  = "statistics";
     public static final String CACHE_INSIGHTS    = "insights";
 
-    /** All four cache names in declaration order. */
+    /** All cache names — used by the cache-evict endpoint and refresh job. */
     public static final List<String> ALL_CACHE_NAMES = List.of(
-            CACHE_MODEL_INFO, CACHE_MODEL_COEFF, CACHE_STATISTICS, CACHE_INSIGHTS);
+            CACHE_MODEL_COEFF, CACHE_STATISTICS, CACHE_INSIGHTS);
 
     @Value("${cache.refresh-interval-ms:600000}")
     private long refreshIntervalMs;
@@ -33,13 +35,11 @@ public class CacheConfig {
     public CacheManager cacheManager() {
         SimpleCacheManager manager = new SimpleCacheManager();
         manager.setCaches(List.of(
-                // ML model metadata — source of truth for all other caches
-                caffeineCache(CACHE_MODEL_INFO),
-                // Derived coefficients — same lifecycle as modelInfo
+                // ML model coefficients — used only in the what-if sensitivity table
                 caffeineCache(CACHE_MODEL_COEFF),
-                // Market KPI stats — derived from 3 ML predictions
+                // Market KPI stats — computed from CSV rows
                 caffeineCache(CACHE_STATISTICS),
-                // Full insights — 288 ML predictions; most expensive to compute
+                // Full insights — segments + best-value, all from CSV rows
                 caffeineCache(CACHE_INSIGHTS)
         ));
         return manager;
@@ -48,7 +48,7 @@ public class CacheConfig {
     private CaffeineCache caffeineCache(String name) {
         return new CaffeineCache(name,
                 Caffeine.newBuilder()
-                        .maximumSize(1)                                         // single global entry per cache
+                        .maximumSize(1)
                         .expireAfterWrite(refreshIntervalMs, TimeUnit.MILLISECONDS)
                         .recordStats()
                         .build());

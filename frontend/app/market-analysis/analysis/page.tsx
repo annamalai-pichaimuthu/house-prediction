@@ -294,8 +294,6 @@ function AnalysisContent({
                         unitsNeeded < 1
                           ? unitsNeeded.toFixed(2)
                           : Math.round(unitsNeeded).toLocaleString();
-                      // d.unit is e.g. "per sq ft", "per point", "per year", "per mile"
-                      // strip "per " to get the noun: "sq ft", "point", "year", "mile"
                       const unitNoun = d.unit.replace(/^per\s*/i, "").trim();
                       // pluralise simple nouns
                       const unitLabel =
