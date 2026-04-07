@@ -16,7 +16,7 @@ import os
 import joblib
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import Ridge
+from sklearn.linear_model import Ridge, RidgeCV
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import cross_val_score, train_test_split
 from sklearn.pipeline import Pipeline
@@ -81,12 +81,29 @@ def train():
         logger.info("Train set: %d samples, Test set: %d samples", len(X_train), len(X_test))
         logger.debug("Training features shape: %s", X_train.shape)
 
-        # 3. Pipeline: StandardScaler → Ridge regression
-        logger.info("Creating pipeline with StandardScaler and Ridge regression")
+        # 3. Find best alpha via RidgeCV (generalised cross-validation), then
+        #    build the final pipeline with that alpha.
+        logger.info("Searching for best alpha via RidgeCV (LOO-GCV)...")
+        ALPHAS = np.logspace(-2, 1, 50)    # 0.01 … 10, 50 candidates
+        try:
+            # RidgeCV on scaled features — fit scaler first so the CV search
+            # operates in the same feature space as the final model.
+            scaler_for_cv = StandardScaler()
+            X_train_scaled = scaler_for_cv.fit_transform(X_train)
+            ridge_cv = RidgeCV(alphas=ALPHAS, scoring="r2", cv=5)
+            ridge_cv.fit(X_train_scaled, y_train)
+            best_alpha = float(ridge_cv.alpha_)
+            logger.info("Best alpha found: %.4f (searched %d candidates)", best_alpha, len(ALPHAS))
+        except Exception as e:
+            best_alpha = 1.0
+            logger.warning("Alpha search failed (%s) — falling back to alpha=1.0", e)
+
+        # 4. Pipeline: StandardScaler → Ridge regression with the best alpha
+        logger.info("Creating pipeline with StandardScaler and Ridge(alpha=%.4f)", best_alpha)
         pipeline = Pipeline(
             [
                 ("scaler", StandardScaler()),
-                ("model", Ridge(alpha=1.0)),
+                ("model", Ridge(alpha=best_alpha)),
             ]
         )
         logger.debug("Pipeline created successfully")
@@ -162,7 +179,12 @@ def train():
                 "feature_columns": FEATURE_COLS,
                 "target_column":   TARGET_COL,
                 "model_type":      "Ridge Regression",
-                "alpha":           1.0,
+                "alpha":           round(best_alpha, 6),
+                "alpha_search":    {
+                    "method":        "RidgeCV (5-fold CV)",
+                    "candidates":    len(ALPHAS),
+                    "search_range":  [round(float(ALPHAS[0]), 4), round(float(ALPHAS[-1]), 1)],
+                },
                 "training_rows":   int(len(X_train)),
                 "test_rows":       int(len(X_test)),
                 "metrics": {
