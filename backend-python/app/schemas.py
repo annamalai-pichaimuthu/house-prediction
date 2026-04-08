@@ -1,7 +1,7 @@
 from __future__ import annotations
 from datetime import datetime
 from typing import Literal, Union
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 _CURRENT_YEAR: int = datetime.now().year
 
@@ -21,6 +21,14 @@ class HouseFeatures(BaseModel):
         ..., ge=0.5, le=10,
         description="Number of bathrooms; half-baths allowed, e.g. 1.5 (0.5 – 10)",
     )
+
+    @field_validator("bathrooms")
+    @classmethod
+    def bathrooms_must_be_half_increment(cls, v: float) -> float:
+        if round(v * 2) != v * 2:
+            raise ValueError("Bathrooms must be in 0.5 increments (e.g. 1, 1.5, 2, 2.5)")
+        return v
+
     year_built: int = Field(
         ..., ge=1800, le=_CURRENT_YEAR,
         description=f"Year the property was originally constructed (1800 – {_CURRENT_YEAR})",
